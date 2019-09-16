@@ -39,11 +39,18 @@ public class MappedFileQueue {
 
     private final int mappedFileSize;
 
+    /**
+     * -- 由于使用了内存映射，只要存在于存储目录下的文件，都需要对应创建内存映射文件，如果不定时将已消费的消息从存储文件中删除，
+     * 会造成极大的内存压力与资源浪费，所有RocketMQ 采取定时删除存储文件的策略，也就是说在存储文件中，
+     * 第一个文件不一定是 00000000000000000000，因为该文件在某一时刻会被删除
+     */
     private final CopyOnWriteArrayList<MappedFile> mappedFiles = new CopyOnWriteArrayList<MappedFile>();
 
     private final AllocateMappedFileService allocateMappedFileService;
 
+    // -- 当前刷盘指针，表示该指针之前的所有数据全部持久化到磁盘
     private long flushedWhere = 0;
+    // -- 当前数据提交指针，内存中 ByteBuffer当前的写指针，该值大于等于flushedWhere。
     private long committedWhere = 0;
 
     private volatile long storeTimestamp = 0;
@@ -74,6 +81,10 @@ public class MappedFileQueue {
         }
     }
 
+    /**
+     * -- 根据消息存储时间戳来查找 MappdFile。从 MappedFile列表中第一个文件开始查找，
+     * 找到第一个最后一次更新时间大于待查找时间戳的文件，如果不存在，则返回最后一个 MappedFile 文件
+     */
     public MappedFile getMappedFileByTime(final long timestamp) {
         Object[] mfs = this.copyMappedFiles(0);
 
@@ -299,6 +310,9 @@ public class MappedFileQueue {
         return -1;
     }
 
+    /**
+     * -- 获取存储文件的最大偏移量。 返回最后一个MappedFile文件的fileFromOffset加上MappedFile文件当前的读指针？
+     */
     public long getMaxOffset() {
         MappedFile mappedFile = getLastMappedFile();
         if (mappedFile != null) {
