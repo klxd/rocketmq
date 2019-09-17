@@ -151,6 +151,9 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     *
+     */
     public long getOffsetInQueueByTime(final long timestamp) {
         MappedFile mappedFile = this.mappedFileQueue.getMappedFileByTime(timestamp);
         if (mappedFile != null) {
@@ -425,6 +428,9 @@ public class ConsumeQueue {
             return true;
         }
 
+        // -- 依次将消息偏移量、消息长度、tagHashCode 写入到ByteBuffer中,并根据
+        // consumeQueueOffset 计算 ConumeQueue中的物理地址,将内容追加到ConsumeQueue的内
+        // 存映射文件中(本操作只追加并不刷盘), ConsumeQueue的刷盘方式固定为异步刷盘模式 。
         this.byteBufferIndex.flip();
         this.byteBufferIndex.limit(CQ_STORE_UNIT_SIZE);
         this.byteBufferIndex.putLong(offset);
@@ -483,6 +489,13 @@ public class ConsumeQueue {
         }
     }
 
+    /**
+     * -- 根据 startIndex获取消息消费队列条目
+     * 首先 startIndex*20得到在consumeQueue中的物理偏移量,
+     * 如果该offset小于minLogicOffset,则返回null,说明该消息已被删除;
+     * 如果大于minLogicOffset,则根据偏移量定位到具体的物理文件,然后通过offset与物理文大小
+     * 取模获取在该文件的偏移量 ,从而从偏移量开始连续读取 20 个字节即可 。
+     */
     public SelectMappedBufferResult getIndexBuffer(final long startIndex) {
         int mappedFileSize = this.mappedFileSize;
         long offset = startIndex * CQ_STORE_UNIT_SIZE;

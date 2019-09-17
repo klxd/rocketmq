@@ -1501,6 +1501,7 @@ public class DefaultMessageStore implements MessageStore {
 
     class CommitLogDispatcherBuildIndex implements CommitLogDispatcher {
 
+        // -- 如果messageIndexEnable设置为true,则构建Hash索引,否则忽略本次转发任务
         @Override
         public void dispatch(DispatchRequest request) {
             if (DefaultMessageStore.this.messageStoreConfig.isMessageIndexEnable()) {
@@ -1778,6 +1779,10 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    /**
+     * ReputMessageService来准实时转发CommitLog文件更新事件, 相应的任务处理器根据
+     * 转发的消息及时更新ConsumeQueue、IndexFile文件
+     */
     class ReputMessageService extends ServiceThread {
 
         private volatile long reputFromOffset = 0;
@@ -1828,18 +1833,24 @@ public class DefaultMessageStore implements MessageStore {
                     break;
                 }
 
+                // -- 返回reputFromOffset偏移量开始的全部有效数据(commitLog文件), 然后循环读取每一条消息
                 SelectMappedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
                 if (result != null) {
                     try {
                         this.reputFromOffset = result.getStartOffset();
 
                         for (int readSize = 0; readSize < result.getSize() && doNext; ) {
+                            // -- 从 result返回的 ByteBuffer中循环读取消息,一次读取一条,创建DispatchRequest对象
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
                             int size = dispatchRequest.getBufferSize() == -1 ? dispatchRequest.getMsgSize() : dispatchRequest.getBufferSize();
 
                             if (dispatchRequest.isSuccess()) {
                                 if (size > 0) {
+
+                                    // -- 如果消息长度大于0,则调用doDispatch方法
+                                    // 最终将分别调用 CommitLogDispatcherBuildConsumeQueue(构建消息消费队列)
+                                    //和CommitLogDispatcherBuildIndex(构建索引文件)
                                     DefaultMessageStore.this.doDispatch(dispatchRequest);
 
                                     if (BrokerRole.SLAVE != DefaultMessageStore.this.getMessageStoreConfig().getBrokerRole()
@@ -1890,6 +1901,10 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        /**
+         * -- ReputMessageService线程每执行一次任务推送休息1毫秒就继续尝试推送消息到消息
+         * 消费队列和索引文件,消息消费转发的核心实现在doReput方法中实 现
+         */
         @Override
         public void run() {
             DefaultMessageStore.log.info(this.getServiceName() + " service started");
