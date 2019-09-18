@@ -54,7 +54,8 @@ public class MappedFile extends ReferenceResource {
 
     // -- 当前该文件的写指针，从 0开始(内存映射文件中的写指针）
     protected final AtomicInteger wrotePosition = new AtomicInteger(0);
-    // -- 当前文件的提交指针，如果开启 transientStorePoolEnable， 则数据会存储在 TransientStorePool 中，然后提交到内存映射 ByteBuffer 中， 再刷写到磁盘
+    // -- 当前文件的提交指针，如果开启 transientStorePoolEnable,
+    // 则数据会存储在 TransientStorePool中，然后提交到内存映射 ByteBuffer中，再刷写到磁盘
     protected final AtomicInteger committedPosition = new AtomicInteger(0);
     // -- 刷写到磁盘指针，该指针之前的数据持久化到磁盘中
     private final AtomicInteger flushedPosition = new AtomicInteger(0);
@@ -283,12 +284,12 @@ public class MappedFile extends ReferenceResource {
         return false;
     }
     /**
-     * --  刷写磁盘，直接调用mappedByteBuffer或fileChannel的force方法将内存中的数据持久化到磁盘，
-     * 那么flushedPosition应该等于 MappedByteBuffer 中的写指针;
-     * 如果 writeBuffer不为空， 则flushedPosition应等于上一次commit指针;
-     * 因为上一次提交的数据就是 进入到 MappedByteBuffer 中的数据;
-     * 如 果 writeBuffer 为 空，数据是直接进入到 Mapped­ ByteBuffer,
-     * wrotePosition 代表的是 MappedByteBuffer 中的指针，故设置 flushedPosition 为 wrotePosition。
+     * -- 刷写磁盘，直接调用mappedByteBuffer或fileChannel的force方法将内存中的数据持久化到磁盘，
+     * 那么flushedPosition应该等于MappedByteBuffer中的写指针;
+     * 如果writeBuffer不为空, 则flushedPosition应等于上一次commit指针;
+     * 因为上一次提交的数据就是进入到MappedByteBuffer中的数据;
+     * 如果writeBuffer为空，数据是直接进入到 MappedByteBuffer,
+     * wrotePosition代表的是MappedByteBuffer中的指针，故设置flushedPosition为wrotePosition。
      */
     /**
      * @return The current flushed position
@@ -351,7 +352,7 @@ public class MappedFile extends ReferenceResource {
      * 设置 limit为 wrotePosition (当前最大有效数据指针)，然后把committedPosition到wrotePosition的数据复制 (写入)到FileChannel中，
      * 然后更新committedPosition指针为wrotePosition。
      * commit的作用就是将MappedFile ­ writeBuffer 中的数据提交到文件通道 FileChannel 中。
-     * ByteBuffer 使用技巧 : slice() 方法创建一个共享缓存区，
+     * ByteBuffer使用技巧: slice() 方法创建一个共享缓存区，
      * 与原先的 ByteBuffer 共享内存 但维护一套独立的指针 (position、 mark、 limit)。
      */
     protected void commit0(final int commitLeastPages) {

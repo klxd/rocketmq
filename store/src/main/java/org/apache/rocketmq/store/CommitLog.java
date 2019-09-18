@@ -548,7 +548,7 @@ public class CommitLog {
         String topic = msg.getTopic();
         int queueId = msg.getQueueId();
 
-        /** -- 如果消息的延迟级别 大于 0 ,将消息的原主题名称与原消息队列ID存入消息属性中,
+        /** -- 如果消息的延迟级别大于0 ,将消息的原主题名称与原消息队列ID存入消息属性中,
          * 用延迟消息主题 SCHEDULE TOPIC 消 息队列ID 更新原先消息的主题与队列,
          * 这是并发消息消费重试关键的一步
          */
@@ -652,15 +652,19 @@ public class CommitLog {
         return putMessageResult;
     }
 
+    // -- 文件刷盘
     public void handleDiskFlush(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
         // Synchronization flush
         if (FlushDiskType.SYNC_FLUSH == this.defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
             final GroupCommitService service = (GroupCommitService) this.flushCommitLogService;
             if (messageExt.isWaitStoreMsgOK()) {
+                // -- 构建GroupCommitRequest同步任务并提交
                 GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
                 service.putRequest(request);
+                // 使用countDownLatch上的await方法,等待刷盘任务完成,最长等待时间由配置决定
                 boolean flushOK = request.waitForFlush(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
                 if (!flushOK) {
+                    // -- 等待同步刷盘任务完成,如果超时则返回刷盘错误, 刷盘成功后正常返回给调用方
                     log.error("do groupcommit, wait for flush failed, topic: " + messageExt.getTopic() + " tags: " + messageExt.getTags()
                         + " client address: " + messageExt.getBornHostString());
                     putMessageResult.setPutMessageStatus(PutMessageStatus.FLUSH_DISK_TIMEOUT);
@@ -1047,6 +1051,7 @@ public class CommitLog {
 
     public static class GroupCommitRequest {
         private final long nextOffset;
+        // -- 初始化CountDownLatch,计数为1,即调用一次countDown就停止所有await的阻塞
         private final CountDownLatch countDownLatch = new CountDownLatch(1);
         private volatile boolean flushOK = false;
 
@@ -1078,7 +1083,9 @@ public class CommitLog {
      * GroupCommit Service
      */
     class GroupCommitService extends FlushCommitLogService {
+        // -- 同步刷盘任务暂存容器
         private volatile List<GroupCommitRequest> requestsWrite = new ArrayList<GroupCommitRequest>();
+        // -- GroupCommitService 线程每次处理的request容器,这是一个设计亮点 ,避免了任务提交与任务执行的锁冲突
         private volatile List<GroupCommitRequest> requestsRead = new ArrayList<GroupCommitRequest>();
 
         public synchronized void putRequest(final GroupCommitRequest request) {
@@ -1090,6 +1097,10 @@ public class CommitLog {
             }
         }
 
+        /**
+         * --由于避免同步刷盘消费任务与其他消息生产者提交任务直接的锁竞争,
+         * GroupCommitService提供读容器与写容器,这两个容器每执行完一次任务后,交互,继续消费任务
+         */
         private void swapRequests() {
             List<GroupCommitRequest> tmp = this.requestsWrite;
             this.requestsWrite = this.requestsRead;
@@ -1097,6 +1108,7 @@ public class CommitLog {
         }
 
         private void doCommit() {
+            // 刷盘操作时, 只锁requestsRead
             synchronized (this.requestsRead) {
                 if (!this.requestsRead.isEmpty()) {
                     for (GroupCommitRequest req : this.requestsRead) {
@@ -1111,9 +1123,12 @@ public class CommitLog {
                             }
                         }
 
+                        // 唤起await在request上的等待线程
                         req.wakeupCustomer(flushOK);
                     }
 
+                    // -- 处理完所有同步刷盘任务后,更新刷盘检测点 StoreCheckpoint 中的 physicMsgTimestamp,
+                    // 但并没有执行检测点的刷盘操作,刷盘检测点的刷盘操作将在刷 写消息队列文件时触发
                     long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
                     if (storeTimestamp > 0) {
                         CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(storeTimestamp);
@@ -1133,6 +1148,7 @@ public class CommitLog {
 
             while (!this.isStopped()) {
                 try {
+                    // 等待10毫秒, 等待完成时交换读写请求(swapRequests)
                     this.waitForRunning(10);
                     this.doCommit();
                 } catch (Exception e) {

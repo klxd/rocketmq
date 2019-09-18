@@ -47,6 +47,7 @@ public class HAService {
 
     private final List<HAConnection> connectionList = new LinkedList<>();
 
+    // -- HAMaster端监昕客户端连接实现类 。
     private final AcceptSocketService acceptSocketService;
 
     private final DefaultMessageStore defaultMessageStore;
@@ -54,8 +55,10 @@ public class HAService {
     private final WaitNotifyObject waitNotifyObject = new WaitNotifyObject();
     private final AtomicLong push2SlaveMaxOffset = new AtomicLong(0);
 
+    // -- 主从同步通知实现类
     private final GroupTransferService groupTransferService;
 
+    // -- HAClient端实现类。
     private final HAClient haClient;
 
     public HAService(final DefaultMessageStore defaultMessageStore) throws IOException {
@@ -198,6 +201,9 @@ public class HAService {
          */
         @Override
         public void run() {
+            // 该方法是标准的基于NIO的服务端程式实例,选择器每ls处理一次连接就绪事件.
+            // 连接事件就绪后,调用ServerSocketChannel的accept()方法创建SocketChannel.
+            // 然后为每一个连接创建一个HAConnection对象, 该HAConnection将负责M-S数据同步逻辑
             log.info(this.getServiceName() + " service started");
 
             while (!this.isStopped()) {
@@ -275,6 +281,12 @@ public class HAService {
             this.requestsRead = tmp;
         }
 
+        // -- GroupTransferService的职责是负责当主从同步复制结束后通知由于等待HA同步结果
+        // 而阻塞的消息发送者线程。判断主从同步是否完成的依据是Slave中已成功复制的最大偏移
+        // 量是否大于等于消息生产者发送消息后消息服务端返回下一条消息的起始偏移量 ,如果是则
+        // 表示主从同步复制已经完成,唤醒消息发送线程 ,否则 等待ls再次判断, 每一个任务在一
+        // 批任务中循环判断5次。消息发送者返回有两种情况: 等待超过5s或GroupTransferService
+        // 通知主从复制完成 。 可以通过 syncFlushTimeout 来 设置发送线程等待超时时间
         private void doWaitTransfer() {
             synchronized (this.requestsRead) {
                 if (!this.requestsRead.isEmpty()) {
