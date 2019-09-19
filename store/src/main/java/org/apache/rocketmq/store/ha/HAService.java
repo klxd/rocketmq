@@ -58,7 +58,7 @@ public class HAService {
     // -- 主从同步通知实现类
     private final GroupTransferService groupTransferService;
 
-    // -- HAClient端实现类。
+    // -- HAClient端实现类
     private final HAClient haClient;
 
     public HAService(final DefaultMessageStore defaultMessageStore) throws IOException {
@@ -336,16 +336,22 @@ public class HAService {
     }
 
     class HAClient extends ServiceThread {
+        // -- Socket读缓存区大小
         private static final int READ_MAX_BUFFER_SIZE = 1024 * 1024 * 4;
         private final AtomicReference<String> masterAddress = new AtomicReference<>();
+        // -- Slave向Master发起主从同步的拉取偏移量
         private final ByteBuffer reportOffset = ByteBuffer.allocate(8);
         private SocketChannel socketChannel;
         private Selector selector;
         private long lastWriteTimestamp = System.currentTimeMillis();
 
+        // -- 反馈Slave当前的复制进度,commitLog文件最大偏移量
         private long currentReportedOffset = 0;
+        // -- 本次己处理读缓存区的指针
         private int dispatchPosition = 0;
+        // -- 读缓存区,大小为4M
         private ByteBuffer byteBufferRead = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
+        // -- 读缓存区备份,与BufferRead进行交换
         private ByteBuffer byteBufferBackup = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
 
         public HAClient() throws IOException {
@@ -360,6 +366,8 @@ public class HAService {
             }
         }
 
+        // -- 判断是否需要向Master反馈当前待拉取偏移量,
+        // Master与Slave的HA心跳发送间隔默认为5s,可通过配置haSendHeartbeatInterval来改变心跳间隔
         private boolean isTimeToReportOffset() {
             long interval =
                 HAService.this.defaultMessageStore.getSystemClock().now() - this.lastWriteTimestamp;
@@ -369,13 +377,23 @@ public class HAService {
             return needHeart;
         }
 
+        /**
+         * 向Master服务器反馈拉取偏移量.
+         * 这里有两重意义,对于Slave端来说,是发送下次待拉取消息偏移量,
+         * 而对于Master服务端来说,既可以认为是Slave本次请求拉取
+         * 的消息偏移量,也可以理解为Slave的消息同步ACK确认消息
+         */
         private boolean reportSlaveMaxOffset(final long maxOffset) {
             this.reportOffset.position(0);
             this.reportOffset.limit(8);
             this.reportOffset.putLong(maxOffset);
+            // -- 从写模式切换到读模式,这里的用法是手动将position设置为0, limit设置为可读长度,
+            // 其实这里可以直接调用ByteBuffer的flip()方法来切换ByteBuffer的读写状态
             this.reportOffset.position(0);
             this.reportOffset.limit(8);
 
+            // -- 调用网络通道的write方法是在一个while循环中反复判断byteBuffer是否全部写入到通道中,
+            // 这是由于NIO是一个非阻塞IO,调用 一次write方法不一定会将ByteBuffer可读字节全部写入
             for (int i = 0; i < 3 && this.reportOffset.hasRemaining(); i++) {
                 try {
                     this.socketChannel.write(this.reportOffset);
@@ -413,11 +431,16 @@ public class HAService {
             this.byteBufferBackup = tmp;
         }
 
+        // -- 处理网络读请求,即处理从Master服务器传田的消息数据
         private boolean processReadEvent() {
             int readSizeZeroTimes = 0;
+            // -- 循环判断readByteBuffer是否还有剩余空间,
             while (this.byteBufferRead.hasRemaining()) {
                 try {
+                    // -- 如果存在剩余空间,则调用SocketChannel#read,将通道中的数据读入到读缓存区中
                     int readSize = this.socketChannel.read(this.byteBufferRead);
+                    // -- 1)如果读取到的字节数大于0,重置读取到0字节的次数,并更新最后一次写入时间戳(lastWriteTimestamp),
+                    // 然后调用dispatchReadRequest方法将读取到的所有消息全部追加到消息内存映射文件中,然后再次反馈拉取进度给服务器
                     if (readSize > 0) {
                         readSizeZeroTimes = 0;
                         boolean result = this.dispatchReadRequest();
@@ -426,10 +449,12 @@ public class HAService {
                             return false;
                         }
                     } else if (readSize == 0) {
+                        // -- 2)如果连续3次从网络通道读取到0个字节,则结束本次读,返回true 。
                         if (++readSizeZeroTimes >= 3) {
                             break;
                         }
                     } else {
+                        // -- 3)如果读取到的字节数小于0或发生IO异常,则返回false 。
                         log.info("HAClient, processReadEvent read socket < 0");
                         return false;
                     }
@@ -505,6 +530,16 @@ public class HAService {
             return result;
         }
 
+        /**
+         * Slave服务器连接Master服务器
+         * 如果 socketChannel为空,则尝试连接Master.
+         * 如果master地址为空,返回 false;如果master地址不为空,则建立到Master的TCP连接,
+         * 然后注册OP_READ(网络读事件),初始化currentReportedOffset为commitLog文件的最大偏移量 、
+         * lastWriteTimestamp上次写人时间戳为当前时间 戳,并返回true.
+         * 在Broker启动时,如果Broker 角色为 SLAVE 时将读取 Broker 配置文件中的 haMasterAddress
+         * 属性并更新HAClient的 masterAddress,如果角色为 SLAVE并且haMasterAddress为空 ,
+         * 启动并不会报错,但不会执行主从同步复制,该方法最终返回是否成功连接上 Master 。
+         */
         private boolean connectMaster() throws ClosedChannelException {
             if (null == socketChannel) {
                 String addr = this.masterAddress.get();
