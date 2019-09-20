@@ -21,6 +21,7 @@ package org.apache.rocketmq.broker.filtersrv;
 import org.apache.rocketmq.logging.InternalLogger;
 
 public class FilterServerUtil {
+    // -- JAVA调用shell脚本的一种实现方法
     public static void callShell(final String shellString, final InternalLogger log) {
         Process process = null;
         try {

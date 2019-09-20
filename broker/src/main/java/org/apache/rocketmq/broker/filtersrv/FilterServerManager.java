@@ -52,6 +52,8 @@ public class FilterServerManager {
 
     public void start() {
 
+        // -- 每30s检测一下当前存活的FilterServer进程的个数,
+        // 如果当前存活的FilterServer进程个数小于配置的数量, 则自动创建一个FilterServer进程
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
@@ -99,10 +101,13 @@ public class FilterServerManager {
     }
 
     public void registerFilterServer(final Channel channel, final String filterServerAddr) {
+        // -- 以网络通道为key获取FilterServerInfo
         FilterServerInfo filterServerInfo = this.filterServerTable.get(channel);
         if (filterServerInfo != null) {
+            // -- 如果不等于空 ,则更新一下上次更新时间为当前时间
             filterServerInfo.setLastUpdateTimestamp(System.currentTimeMillis());
         } else {
+            // -- 否则创建一个新的FilterServerInfo对象并加入到filterServerTable路由表中
             filterServerInfo = new FilterServerInfo();
             filterServerInfo.setFilterServerAddr(filterServerAddr);
             filterServerInfo.setLastUpdateTimestamp(System.currentTimeMillis());
@@ -111,6 +116,7 @@ public class FilterServerManager {
         }
     }
 
+    // -- Broker每隔10s扫描一下注册表,如果30s内未收到FilterServer的注册信息,将关闭Broker与FilterServer的连接
     public void scanNotActiveChannel() {
 
         Iterator<Entry<Channel, FilterServerInfo>> it = this.filterServerTable.entrySet().iterator();
@@ -146,6 +152,7 @@ public class FilterServerManager {
 
     static class FilterServerInfo {
         private String filterServerAddr;
+        // -- filterServer上次发送心跳包时间
         private long lastUpdateTimestamp;
 
         public String getFilterServerAddr() {

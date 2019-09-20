@@ -40,6 +40,7 @@ public class ClientHousekeepingService implements ChannelEventListener {
 
     public void start() {
 
+        // 每隔10s定时扫描不活跃的channel
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
